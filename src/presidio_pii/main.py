@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from functools import lru_cache
 from typing import Dict, Iterable, List, Tuple
 
@@ -23,6 +24,7 @@ except ImportError:  # pragma: no cover - optional HF dependency
     TransformersRecognizer = None
 
 logger = logging.getLogger("presidio-pii")
+logger.setLevel(logging.INFO)
 
 DEFAULT_MODEL_ID = os.getenv("PII_TRANSFORMER_MODEL", "dslim/bert-base-NER")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct-q4_0")
@@ -31,6 +33,16 @@ MAX_TEXT_LENGTH = int(os.getenv("PII_MAX_TEXT_LENGTH", "5000"))
 DETERMINISTIC_THRESHOLD = float(os.getenv("PII_DETERMINISTIC_THRESHOLD", "0.85"))
 LLM_TRIGGER_THRESHOLD = float(os.getenv("PII_LLM_TRIGGER_THRESHOLD", "0.6"))
 LLM_TIMEOUT_SECONDS = float(os.getenv("PII_LLM_TIMEOUT_SECONDS", "15"))
+
+SUPPORTED_ENTITY_TYPES = {
+    "PERSON",
+    "EMAIL_ADDRESS",
+    "PHONE_NUMBER",
+    "CREDIT_CARD",
+    "LOCATION",
+    "DATE_TIME",
+    "ORGANIZATION",
+}
 
 
 def _allowed_origins() -> List[str]:
@@ -45,6 +57,12 @@ class TextRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=MAX_TEXT_LENGTH, description="Arbitrary text to scan for PII")
 
 
+class TraceEvent(BaseModel):
+    stage: str = Field(..., description="Logical stage within the analysis pipeline")
+    detail: str = Field(..., description="Human readable description of the event")
+    elapsed_ms: float = Field(..., ge=0.0, description="Elapsed milliseconds since request start")
+
+
 class PIIEntity(BaseModel):
     """Details about a detected PII entity."""
 
@@ -53,6 +71,8 @@ class PIIEntity(BaseModel):
     start: int = Field(..., ge=0, description="Start index of the entity in the original text")
     end: int = Field(..., ge=0, description="End index (exclusive) of the entity")
     text: str = Field(..., description="Original text snippet that was detected")
+    source: str = Field(..., description="Detector responsible for the classification (presidio|llm)")
+    explanation: str = Field(..., description="Human readable rationale for the detection")
 
 
 class AnalysisResponse(BaseModel):
@@ -61,6 +81,7 @@ class AnalysisResponse(BaseModel):
     entities: List[PIIEntity] = Field(default_factory=list, description="List of detected entities")
     has_pii: bool = Field(..., description="Whether any PII entities were detected")
     redacted_text: str | None = Field(default=None, description="Source text with detected PII anonymized")
+    trace: List[TraceEvent] = Field(default_factory=list, description="Step-by-step trace of the analysis pipeline")
 
 
 class OllamaClient:
@@ -95,21 +116,34 @@ class OllamaClient:
 
         try:
             parsed = json.loads(raw_output)
-        except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Fallback LLM returned invalid JSON",
-            ) from exc
+        except json.JSONDecodeError:  # pragma: no cover - defensive
+            start = raw_output.find("{")
+            end = raw_output.rfind("}")
+            if start != -1 and end != -1 and start < end:
+                try:
+                    parsed = json.loads(raw_output[start : end + 1])
+                except json.JSONDecodeError:
+                    logger.warning("LLM response not parseable: %s", raw_output)
+                    return []
+            else:
+                logger.warning("LLM response missing JSON object: %s", raw_output)
+                return []
 
         entities = []
         for item in parsed.get("entities", []):
             try:
+                raw_type = str(item.get("type", "")).strip().upper()
+                if raw_type not in SUPPORTED_ENTITY_TYPES:
+                    continue
+                confidence = max(0.0, min(1.0, float(item["score"])) )
                 entity = PIIEntity(
-                    type=str(item["type"]),
+                    type=raw_type,
                     text=str(item["text"]),
                     start=int(item["start"]),
                     end=int(item["end"]),
-                    score=float(item["score"]),
+                    score=confidence,
+                    source="llm",
+                    explanation=f"LLM fallback (qwen2.5) predicted {raw_type} with confidence {confidence:.2f}.",
                 )
             except (KeyError, TypeError, ValueError):  # pragma: no cover - validation guard
                 continue
@@ -164,12 +198,19 @@ def get_analyzer() -> AnalyzerEngine:
 
 
 def _result_to_entity(result: RecognizerResult, source_text: str) -> PIIEntity:
+    snippet = source_text[result.start : result.end]
+    recognizer_name = getattr(result, "recognizer_name", None)
+    explanation = (
+        f"Presidio recognizer {recognizer_name or 'default'} scored {result.score:.2f}."
+    )
     return PIIEntity(
         type=result.entity_type,
         score=result.score,
         start=result.start,
         end=result.end,
-        text=source_text[result.start : result.end],
+        text=snippet,
+        source="presidio",
+        explanation=explanation,
     )
 
 
@@ -203,13 +244,22 @@ def _anonymize_text(text: str, entities: List[PIIEntity]) -> str:
 async def _invoke_llm_if_needed(
     text: str,
     uncertain_results: List[RecognizerResult],
+    *,
     force: bool = False,
+    reason: str = "",
 ) -> List[PIIEntity]:
     if not force and not uncertain_results:
         return []
 
     try:
-        logger.info("Invoking Ollama fallback (force=%s, uncertain=%d)", force, len(uncertain_results))
+        logger.info(
+            "Invoking Ollama fallback",
+            extra={
+                "force": force,
+                "uncertain_count": len(uncertain_results),
+                "reason": reason,
+            },
+        )
         return await ollama_client.analyze(text)
     except httpx.HTTPError:
         return []
@@ -222,6 +272,14 @@ async def health() -> Dict[str, str]:
 
 @app.post("/analyze", response_model=AnalysisResponse, tags=["pii"])
 async def analyze_text(payload: TextRequest) -> AnalysisResponse:
+    start_time = time.perf_counter()
+    events: List[TraceEvent] = []
+
+    def record(stage: str, detail: str) -> None:
+        elapsed = round((time.perf_counter() - start_time) * 1000, 2)
+        events.append(TraceEvent(stage=stage, detail=detail, elapsed_ms=elapsed))
+
+    record("request_received", f"text_length={len(payload.text)} characters")
     analyzer = get_analyzer()
     results: List[RecognizerResult] = analyzer.analyze(text=payload.text, language="en")
 
@@ -237,15 +295,48 @@ async def analyze_text(payload: TextRequest) -> AnalysisResponse:
         else:
             deterministic_entities.append(entity)
 
+    record(
+        "presidio_analysis",
+        f"analyzer_results={len(results)}, deterministic={len(deterministic_entities)}, uncertain={len(uncertain)}",
+    )
+
     fallback_entities: List[PIIEntity] = []
     need_fallback = bool(uncertain) or not deterministic_entities
     if need_fallback:
+        reason = "no_deterministic" if not deterministic_entities else "low_confidence"
+        record(
+            "llm_invocation",
+            f"reason={reason}, uncertain={len(uncertain)}",
+        )
         fallback_entities = await _invoke_llm_if_needed(
             payload.text,
             uncertain,
             force=not deterministic_entities,
+            reason=reason,
+        )
+        record(
+            "llm_response",
+            f"llm_entities={len(fallback_entities)}",
         )
 
     entities = _merge_entities(deterministic_entities, fallback_entities)
     redacted_text = _anonymize_text(payload.text, entities) if entities else payload.text
-    return AnalysisResponse(entities=entities, has_pii=bool(entities), redacted_text=redacted_text)
+    record(
+        "response_ready",
+        f"entities={len(entities)}, has_pii={bool(entities)}",
+    )
+    logger.info(
+        "analysis_complete",
+        extra={
+            "entities": len(entities),
+            "deterministic_entities": len(deterministic_entities),
+            "fallback_entities": len(fallback_entities),
+            "uncertain_count": len(uncertain),
+        },
+    )
+    return AnalysisResponse(
+        entities=entities,
+        has_pii=bool(entities),
+        redacted_text=redacted_text,
+        trace=events,
+    )
