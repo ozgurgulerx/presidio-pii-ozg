@@ -12,7 +12,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN set -e; \
     apt-get update; \
-    apt-get install -y --no-install-recommends build-essential gcc g++ curl ca-certificates; \
+    apt-get install -y --no-install-recommends build-essential gcc g++ curl ca-certificates git; \
     pip install --no-cache-dir -r requirements.txt; \
     python -m spacy download en_core_web_sm; \
     curl -fsSL https://ollama.com/install.sh | OLLAMA_SKIP_BOOTSTRAP=1 sh; \
@@ -24,7 +24,7 @@ RUN set -e; \
         ollama pull qwen2.5:1.5b-instruct-q4_0; \
         kill "${pid}"; \
         wait "${pid}" 2>/dev/null || true'; \
-    apt-get purge -y build-essential gcc g++; \
+    apt-get purge -y build-essential gcc g++ git; \
     apt-get autoremove -y; \
     rm -rf /var/lib/apt/lists/*
 

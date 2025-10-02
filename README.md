@@ -1,5 +1,12 @@
 # Presidio PII Service (FastAPI)
 
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white) 
+![FastAPI](https://img.shields.io/badge/FastAPI-ready-009688?logo=fastapi&logoColor=white) 
+![Docker](https://img.shields.io/badge/Docker-containerized-2496ED?logo=docker&logoColor=white) 
+![Presidio](https://img.shields.io/badge/Presidio-PII%20detection-2E7D32) 
+![Qwen--2.5](https://img.shields.io/badge/LLM-Qwen--2.5-8A2BE2) 
+![Ollama](https://img.shields.io/badge/Runtime-Ollama-00B894)
+
 Detect and anonymize PII with Microsoft Presidio. Deterministic rules and transformer NER run first; for low‑confidence cases the service optionally falls back to a local Qwen‑2.5 model via Ollama. Ships with Docker, docker‑compose, and Azure Container Apps deployment scripts.
 
 ## Highlights
@@ -77,14 +84,20 @@ Environment variables (with defaults):
 ## How it works
 
 ```mermaid
-graph TD
-  A[Client] -->|POST /analyze| B[Presidio Analyzer\n(spaCy + regex + TransformerRecognizer)]
-  B --> C{Score >= τ?}
-  C -- yes --> E[Entities]
-  C -- no  --> D[Ollama Qwen‑2.5 Fallback]
+flowchart TD
+  A[Client]:::muted -->|POST /analyze| B[Presidio Analyzer<br/>(spaCy + regex + TransformerRecognizer)]:::primary
+  B --> C{Score >= τ?}:::decision
+  C -- Yes --> E[Entities]:::good
+  C -- No  --> D[Qwen‑2.5 via Ollama<br/>(fallback)]:::accent
   D --> E
-  E --> F[Presidio Anonymizer]
-  F --> G[Response JSON]
+  E --> F[Presidio Anonymizer]:::primary
+  F --> G[JSON Response]:::muted
+
+  classDef primary fill:#0ea5e9,stroke:#0369a1,color:#ffffff;
+  classDef accent fill:#8b5cf6,stroke:#6d28d9,color:#ffffff;
+  classDef decision fill:#f59e0b,stroke:#b45309,color:#111111;
+  classDef good fill:#10b981,stroke:#065f46,color:#111111;
+  classDef muted fill:#0f172a,stroke:#334155,color:#e2e8f0;
 ```
 
 ## Deployment
