@@ -200,11 +200,16 @@ def _anonymize_text(text: str, entities: List[PIIEntity]) -> str:
     return result.text
 
 
-async def _invoke_llm_if_needed(text: str, uncertain_results: List[RecognizerResult]) -> List[PIIEntity]:
-    if not uncertain_results:
+async def _invoke_llm_if_needed(
+    text: str,
+    uncertain_results: List[RecognizerResult],
+    force: bool = False,
+) -> List[PIIEntity]:
+    if not force and not uncertain_results:
         return []
 
     try:
+        logger.info("Invoking Ollama fallback (force=%s, uncertain=%d)", force, len(uncertain_results))
         return await ollama_client.analyze(text)
     except httpx.HTTPError:
         return []
@@ -233,8 +238,13 @@ async def analyze_text(payload: TextRequest) -> AnalysisResponse:
             deterministic_entities.append(entity)
 
     fallback_entities: List[PIIEntity] = []
-    if not deterministic_entities or uncertain:
-        fallback_entities = await _invoke_llm_if_needed(payload.text, uncertain)
+    need_fallback = bool(uncertain) or not deterministic_entities
+    if need_fallback:
+        fallback_entities = await _invoke_llm_if_needed(
+            payload.text,
+            uncertain,
+            force=not deterministic_entities,
+        )
 
     entities = _merge_entities(deterministic_entities, fallback_entities)
     redacted_text = _anonymize_text(payload.text, entities) if entities else payload.text

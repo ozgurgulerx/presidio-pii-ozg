@@ -4,9 +4,8 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-ready-009688?logo=fastapi&logoColor=white) 
 ![Docker](https://img.shields.io/badge/Docker-containerized-2496ED?logo=docker&logoColor=white) 
 ![Presidio](https://img.shields.io/badge/Presidio-PII%20detection-2E7D32) 
-![Qwen--2.5](https://img.shields.io/badge/LLM-Qwen--2.5-8A2BE2) 
-![Ollama](https://img.shields.io/badge/Runtime-Ollama-00B894)
-
+![Qwen--2.5](https://img.shields.io/badge/LLM-Qwen--2.5-8A2BE2) ![Ollama](https://img.shields.io/badge/Runtime-Ollama-00B894)
+ 
 Detect and anonymize PII with Microsoft Presidio. Deterministic rules and transformer NER run first; for low‑confidence cases the service optionally falls back to a local Qwen‑2.5 model via Ollama. Ships with Docker, docker‑compose, and Azure Container Apps deployment scripts.
 
 ## Highlights
@@ -14,12 +13,18 @@ Detect and anonymize PII with Microsoft Presidio. Deterministic rules and transf
 - **LLM fallback (optional):** Qwen‑2.5 (CPU, quantized) via Ollama for ambiguous cases
 - **Simple REST API:** `POST /analyze`, `GET /health`
 - **Production‑ready:** pinned deps, CORS, timeouts, input caps, containerized
-
+ 
 ## Why this stack
-- **Presidio** is a battle‑tested PII toolkit with strong regex/checksum recognizers.
-- **spaCy** provides reliable tokenization + language tooling.
-- **TransformerRecognizer** (default `dslim/bert-base-NER`) improves entity coverage.
-- **Qwen‑2.5 via Ollama** keeps sensitive data local while handling edge cases when rule/NER confidence is low (default `qwen2.5:1.5b-instruct-q4_0`).
+  - **Presidio** is a battle‑tested PII toolkit with strong regex/checksum recognizers.
+  - **spaCy** provides reliable tokenization + language tooling.
+  - **TransformerRecognizer** (default `dslim/bert-base-NER`) improves entity coverage.
+  - **Qwen‑2.5 via Ollama** keeps sensitive data local while handling edge cases when rule/NER confidence is low (default `qwen2.5:1.5b-instruct-q4_0`).
+### Why Qwen‑2.5 for local PII filtering
+  - **Local‑first privacy:** inference runs via Ollama inside your container/VM, so PII never leaves your machine or VNet.
+  - **CPU‑friendly & small:** default `qwen2.5:1.5b-instruct-q4_0` (quantized) fits CPU‑only nodes for easy on‑prem/edge use.
+  - **Structured outputs:** instruction‑tuned; works well with a JSON‑only extraction prompt.
+  - **Used only when needed:** deterministic Presidio rules run first; Qwen is called for low‑confidence cases to reduce false negatives.
+  - **Swappable:** set `OLLAMA_MODEL` to use any other local model supported by Ollama.
 
 ## Quickstart
 
@@ -27,7 +32,6 @@ Detect and anonymize PII with Microsoft Presidio. Deterministic rules and transf
 ```bash
 # In this repo
 docker compose up --build
-# API is now on http://localhost:8000
 ```
 
 Test it:
