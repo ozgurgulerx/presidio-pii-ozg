@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from functools import lru_cache
 from typing import Dict, Iterable, List, Tuple
@@ -13,7 +14,15 @@ from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResu
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 from presidio_anonymizer.entities import OperatorConfig
-from microsoft_presidio_transformers import TransformerRecognizer
+
+try:
+    from presidio_analyzer.predefined_recognizers.nlp_engine_recognizers.transformers_recognizer import (
+        TransformersRecognizer,
+    )
+except ImportError:  # pragma: no cover - optional HF dependency
+    TransformersRecognizer = None
+
+logger = logging.getLogger("presidio-pii")
 
 DEFAULT_MODEL_ID = os.getenv("PII_TRANSFORMER_MODEL", "dslim/bert-base-NER")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct-q4_0")
@@ -137,19 +146,14 @@ def _build_analyzer() -> AnalyzerEngine:
     registry = RecognizerRegistry()
     registry.load_predefined_recognizers()
 
-    transformers_recognizer = TransformerRecognizer(
-        supported_entities=[
-            "PERSON",
-            "EMAIL_ADDRESS",
-            "PHONE_NUMBER",
-            "CREDIT_CARD",
-            "LOCATION",
-            "DATE_TIME",
-            "ORGANIZATION",
-        ],
-        transformer_model=DEFAULT_MODEL_ID,
-    )
-    registry.add_recognizer(transformers_recognizer)
+    if TransformersRecognizer is not None:
+        try:
+            transformers_recognizer = TransformersRecognizer()
+            registry.add_recognizer(transformers_recognizer)
+        except Exception as exc:  # pragma: no cover - defensive safeguard
+            logger.warning("Failed to initialize transformers recognizer: %s", exc)
+    else:
+        logger.info("TransformersRecognizer unavailable; falling back to SpaCy recognizers only")
 
     return AnalyzerEngine(nlp_engine=nlp_engine, registry=registry, supported_languages=["en"])
 
