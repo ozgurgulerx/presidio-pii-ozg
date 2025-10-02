@@ -15,10 +15,10 @@ Detect and anonymize PII with Microsoft Presidio. Deterministic rules and transf
 - **Production‑ready:** pinned deps, CORS, timeouts, input caps, containerized
  
 ## Why this stack
-  - **Presidio** is a battle‑tested PII toolkit with strong regex/checksum recognizers.
-  - **spaCy** provides reliable tokenization + language tooling.
-  - **TransformerRecognizer** (default `dslim/bert-base-NER`) improves entity coverage.
-  - **Qwen‑2.5 via Ollama** keeps sensitive data local while handling edge cases when rule/NER confidence is low (default `qwen2.5:1.5b-instruct-q4_0`).
+ - **Presidio** is a battle‑tested PII toolkit with strong regex/checksum recognizers.
+ - **spaCy** provides reliable tokenization + language tooling.
+ - **TransformerRecognizer** (default `dslim/bert-base-NER`) improves entity coverage.
+ - **Qwen‑2.5 via Ollama** keeps sensitive data local while handling edge cases when rule/NER confidence is low (default `qwen2.5:1.5b-instruct-q4_0`).
 ### Why Qwen‑2.5 for local PII filtering
   - **Local‑first privacy:** inference runs via Ollama inside your container/VM, so PII never leaves your machine or VNet.
   - **CPU‑friendly & small:** default `qwen2.5:1.5b-instruct-q4_0` (quantized) fits CPU‑only nodes for easy on‑prem/edge use.
@@ -73,42 +73,35 @@ uvicorn presidio_pii.main:app --host 0.0.0.0 --port 8000
     }
     ```
 
-## Configuration
-
-Environment variables (with defaults):
-- `PII_ALLOWED_ORIGINS` — CORS origins (`,` separated). Default: `*`
-- `PII_TRANSFORMER_MODEL` — HF model for `TransformerRecognizer`. Default: `dslim/bert-base-NER`
-- `PII_MAX_TEXT_LENGTH` — Max input length. Default: `5000`
-- `PII_DETERMINISTIC_THRESHOLD` — Score ≥ τ treated as deterministic. Default: `0.85`
-- `PII_LLM_TRIGGER_THRESHOLD` — Score < τ_llm considered uncertain. Default: `0.6`
-- `PII_LLM_TIMEOUT_SECONDS` — Ollama request timeout. Default: `15`
-- `OLLAMA_BASE_URL` — Ollama base URL. Default: `http://127.0.0.1:11434`
-- `OLLAMA_MODEL` — Fallback model id. Default: `qwen2.5:1.5b-instruct-q4_0`
-
+ ## Configuration
+ 
+ Environment variables (with defaults):
+ - `PII_ALLOWED_ORIGINS` — CORS origins (`,` separated). Default: `*`
+ - `PII_TRANSFORMER_MODEL` — HF model for `TransformerRecognizer`. Default: `dslim/bert-base-NER`
+ - `PII_MAX_TEXT_LENGTH` — Max input length. Default: `5000`
+ - `PII_DETERMINISTIC_THRESHOLD` — Score >= tau treated as deterministic. Default: `0.85`
+ - `PII_LLM_TRIGGER_THRESHOLD` — Score below this uses fallback. Default: `0.6`
+ - `PII_LLM_TIMEOUT_SECONDS` — Ollama request timeout (seconds). Default: `15`
+ - `OLLAMA_BASE_URL` — Ollama base URL. Default: `http://127.0.0.1:11434`
+ - `OLLAMA_MODEL` — Fallback model id. Default: `qwen2.5:1.5b-instruct-q4_0`
+  
 ## How it works
 
 ```mermaid
-flowchart TD
-  A[Client] -->|POST /analyze| B[Presidio Analyzer (spaCy, regex, Transformer)]
-  B --> C{Score >= threshold?}
-  C -- Yes --> E[Entities]
-  C -- No --> D[Qwen-2.5 via Ollama (fallback)]
+graph TD
+  A[Client] -->|POST /analyze| B[Presidio Analyzer]
+  B --> C{Score at least threshold}
+  C -->|Yes| E[Entities]
+  C -->|No| D[Qwen 2_5 via Ollama]
   D --> E
   E --> F[Presidio Anonymizer]
   F --> G[JSON Response]
-
-  style A fill:#0f172a,stroke:#334155,color:#e2e8f0
-  style B fill:#0ea5e9,stroke:#0369a1,color:#ffffff
-  style C fill:#f59e0b,stroke:#b45309,color:#111111
-  style D fill:#8b5cf6,stroke:#6d28d9,color:#ffffff
-  style E fill:#10b981,stroke:#065f46,color:#111111
-  style F fill:#0ea5e9,stroke:#0369a1,color:#ffffff
-  style G fill:#0f172a,stroke:#334155,color:#e2e8f0
 ```
+
 ## Deployment
 
 - Azure Container Apps quick start: see `QUICKSTART.md`
-- CORS: set `PII_ALLOWED_ORIGINS` to your frontend’s URL(s)
+- CORS: set `PII_ALLOWED_ORIGINS` to your frontend URL(s)
 
 ## Optional UI
 
