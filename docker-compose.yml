@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  frontend:
+    build:
+      context: ../presidio-pii-ozg-frontend
+      dockerfile: Dockerfile
+    environment:
+      - NEXT_PUBLIC_ANALYZE_URL=http://backend:8000/analyze
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"

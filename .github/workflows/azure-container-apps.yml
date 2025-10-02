@@ -1,0 +1,77 @@
+name: Deploy Backend to Azure Container Apps
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_CONTAINER_REGISTRY: presidiopii
+  CONTAINER_APP_NAME: presidio-pii-backend
+  RESOURCE_GROUP: presidio-pii-rg
+  CONTAINER_APP_ENVIRONMENT: presidio-pii-env
+  IMAGE_NAME: presidio-pii-backend
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to Azure Container Registry
+        run: |
+          az acr login --name ${{ env.AZURE_CONTAINER_REGISTRY }}
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE_TAG=${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          IMAGE_LATEST=${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+          
+          docker build -t $IMAGE_TAG -t $IMAGE_LATEST -f Dockerfile/Dockerfile .
+          docker push $IMAGE_TAG
+          docker push $IMAGE_LATEST
+
+      - name: Deploy to Azure Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --set-env-vars \
+              PII_ALLOWED_ORIGINS="${{ secrets.PII_ALLOWED_ORIGINS }}" \
+              PII_MAX_TEXT_LENGTH="5000" \
+              PII_DETERMINISTIC_THRESHOLD="0.85" \
+              PII_LLM_TRIGGER_THRESHOLD="0.6" \
+              PII_LLM_TIMEOUT_SECONDS="15" \
+              OLLAMA_BASE_URL="http://127.0.0.1:11434" \
+              OLLAMA_MODEL="qwen2.5:1.5b-instruct-q4_0"
+
+      - name: Get Container App URL
+        id: get-url
+        run: |
+          URL=$(az containerapp show \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query properties.configuration.ingress.fqdn \
+            -o tsv)
+          echo "Backend URL: https://$URL"
+          echo "url=https://$URL" >> $GITHUB_OUTPUT
+
+      - name: Health check
+        run: |
+          sleep 30
+          curl -f https://${{ steps.get-url.outputs.url }}/health || exit 1
