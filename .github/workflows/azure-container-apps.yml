@@ -69,7 +69,7 @@ jobs:
             --query properties.configuration.ingress.fqdn \
             -o tsv)
           echo "Backend URL: https://$URL"
-          echo "url=https://$URL" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> $GITHUB_OUTPUT
 
       - name: Health check
         run: |
