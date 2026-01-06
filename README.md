@@ -98,6 +98,14 @@ graph TD
   F --> G[JSON Response]
 ```
 
+### Detection pipeline in detail
+
+1. **Deterministic Presidio pass.** We tokenize the text with spaCy and run Presidio’s predefined recognizers (regex/checksum-backed detectors) for common PII such as email, phone, national ID, IBAN, credit card, addresses, dates, and organizations. Entities scoring ≥ 0.85 are accepted as definitive and annotated with the recognizer name.
+2. **LLM fallback for low confidence.** If no high-score matches exist—or any recognizer scores < 0.6—we call the local Ollama runtime (`qwen2.5:1.5b-instruct-q4_0`). The LLM returns structured JSON. We filter the entity set to supported Presidio types, clamp confidence to `[0,1]`, and record the source as `llm`.
+3. **Risk & trace logic.** Every request records a trace (`request_received → presidio_analysis → llm_invocation → response_ready`). We also flag sessions as `credentialAlert` when we see banking/credential keywords or critical entity types (credit card, IBAN, national ID). The frontend uses those flags to force “High” risk even when values are implicit or partially masked, and to show analysts a full step-by-step timeline.
+
+With this layering, explicit identifiers are caught by the deterministic layer, while narrative or obfuscated references escalate through the LLM—letting analysts review both the extracted entities and the reasoning behind the risk score.
+
 ## Deployment
 
 - Azure Container Apps quick start: see `QUICKSTART.md`

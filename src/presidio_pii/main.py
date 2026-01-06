@@ -16,6 +16,8 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 from presidio_anonymizer.entities import OperatorConfig
 
+from .view_formatter import build_view
+
 try:
     from presidio_analyzer.predefined_recognizers.nlp_engine_recognizers.transformers_recognizer import (
         TransformersRecognizer,
@@ -43,6 +45,19 @@ SUPPORTED_ENTITY_TYPES = {
     "DATE_TIME",
     "ORGANIZATION",
 }
+
+CREDENTIAL_KEYWORDS = (
+    "password",
+    "passcode",
+    "passphrase",
+    "login",
+    "username",
+    "otp",
+    "one-time passcode",
+    "one time passcode",
+    "verification code",
+    "security code",
+)
 
 
 def _allowed_origins() -> List[str]:
@@ -280,6 +295,10 @@ async def analyze_text(payload: TextRequest) -> AnalysisResponse:
         events.append(TraceEvent(stage=stage, detail=detail, elapsed_ms=elapsed))
 
     record("request_received", f"text_length={len(payload.text)} characters")
+    lower_text = payload.text.lower()
+    if any(keyword in lower_text for keyword in CREDENTIAL_KEYWORDS):
+        record("credential_alert", "Potential credential keywords detected in input")
+
     analyzer = get_analyzer()
     results: List[RecognizerResult] = analyzer.analyze(text=payload.text, language="en")
 
@@ -334,9 +353,11 @@ async def analyze_text(payload: TextRequest) -> AnalysisResponse:
             "uncertain_count": len(uncertain),
         },
     )
-    return AnalysisResponse(
+    analysis = AnalysisResponse(
         entities=entities,
         has_pii=bool(entities),
         redacted_text=redacted_text,
         trace=events,
     )
+    view = build_view(payload.text, analysis.entities, analysis.redacted_text or payload.text)
+    return {**analysis.dict(), "view": view}
